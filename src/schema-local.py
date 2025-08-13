@@ -53,6 +53,11 @@ def generate_schema_description(host, user, password, database, port=3306) -> st
     
     return "\n".join(schema_description)
 
+# Log and run the query
+def log_and_run_query(db: SQLDatabase, query: str):
+    print(f"Executing SQL Query: {query}")
+    return db.run(query)
+
 # Initialize the MySQL connection
 def init_database(host: str, user: str, password: str, database: str, port: str) -> SQLDatabase:
     db_uri = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
@@ -84,7 +89,7 @@ def get_sql_chain(db: SQLDatabase, schema_text: str):
     Question: Which 3 members have the most users?
     SQL Query: select m.name as member_name, count(u.id) as user_count from `wnxa-staging`.Member m JOIN `wnxa-staging`.User u on u.memberId = m.id GROUP BY m.id ORDER BY user_count DESC LIMIT 3;
     Question: How many active members are there?
-    SQL Query: select count(*) from `wnxa-staging`.User where isActive = 1;
+    SQL Query: select count(*) from `wnxa-staging`.Member where isActive = 1;
 
     Question: {question}
     SQL Query:
@@ -127,7 +132,7 @@ def get_response(user_query: str, db: SQLDatabase, chat_history: list, schema_te
     chain = (
         RunnablePassthrough.assign(query=sql_chain).assign(
             schema=lambda _: schema_text, 
-            response=lambda vars: db.run(vars["query"]),
+            response=lambda vars: log_and_run_query(db, vars["query"]),
             )
         | prompt
         | llm

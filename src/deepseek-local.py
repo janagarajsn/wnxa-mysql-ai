@@ -33,7 +33,7 @@ def get_sql_chain(db: SQLDatabase):
     Question: Which 3 members have the most users?
     SQL Query: select m.name as member_name, count(u.id) as user_count from wnxa-staging.Member m JOIN wnxa-staging.User u on u.memberId = m.id GROUP BY m.id ORDER BY user_count DESC LIMIT 3;
     Question: How many active members are there?
-    SQL Query: select count(*) from wnxa-staging.User where isActive = 1;
+    SQL Query: select count(*) from wnxa-staging.Member where isActive = 1;
 
     Question: {question}
     SQL Query:

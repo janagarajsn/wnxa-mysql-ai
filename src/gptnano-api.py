@@ -17,6 +17,11 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 st.set_page_config(page_title="WNXA MySQL AI", page_icon=":speech_balloon:", layout="wide")
 st.title("Chat with WNXA MySQL DB")
 
+# Log and run the query
+def log_and_run_query(db: SQLDatabase, query: str):
+    logging.info(f"Executing SQL Query: {query}")
+    return db.run(query)
+
 # Initialize the MySQL connection
 def init_database(host: str, user: str, password: str, database: str, port: str) -> SQLDatabase:
     db_uri = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
@@ -80,7 +85,7 @@ def get_response(user_query: str, db: SQLDatabase, chat_history: list):
     chain = (
         RunnablePassthrough.assign(query=sql_chain).assign(
             schema=lambda _: db.get_table_info(), 
-            response=lambda vars: db.run(vars["query"]),
+            response=lambda vars: log_and_run_query(db, vars["query"]),
             )
         | prompt
         | llm
@@ -145,6 +150,7 @@ if user_query:
                 response = "Please connect to the database first."
             else:
                 response = get_response(user_query, st.session_state.db, st.session_state.chat_history)
+                logging.info(f"Response generated")
             st.markdown(response)
         except Exception as e:
             st.error(f"Error processing your request: {e}")

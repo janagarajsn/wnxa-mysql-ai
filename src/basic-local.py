@@ -14,12 +14,18 @@ load_dotenv()
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 
+# Choose models and temperature from environment variables
 sql_chain_model = os.getenv("SQL_CHAIN_MODEL", "llama3.1:8b")
 sql_response_model = os.getenv("SQL_RESPONSE_MODEL", "llama3.1:8b")
 llm_temperature = float(os.getenv("LLM_TEMPERATURE", 0.0))
 
 st.set_page_config(page_title="WNXA MySQL AI", page_icon=":speech_balloon:", layout="wide")
 st.title("Chat with WNXA MySQL DB")
+
+# Log and run the query
+def log_and_run_query(db: SQLDatabase, query: str):
+    logging.info(f"Executing SQL Query: {query}")
+    return db.run(query)
 
 # Initialize the MySQL connection
 def init_database(host: str, user: str, password: str, database: str, port: str) -> SQLDatabase:
@@ -29,30 +35,19 @@ def init_database(host: str, user: str, password: str, database: str, port: str)
 # Get SQL Chain
 def get_sql_chain(db: SQLDatabase):
     prompt_template = """
-    You are a MySQL query generator. Based on the table schema below, write a SQL query that would answer the user's question. Take the conversation history into account.
+    You are a Data Analyst for the WNXA MySQL database.
+    Based on the table schema below, write a SQL query that would answer the user's question. Take the conversation history into account.
 
     <SCHEMA>{schema}</SCHEMA>
     Conversation History: {chat_history}
 
-    Important instructions:
-    Use ONLY the schema below to write the correct SQL query for the question.
-    Output ONLY the SQL code. No explanations, no reasoning, no <think> tags.
-    Write only the pure SQL query without any markdown, code fences, or extra explanation.
-    Use the exact table and column names as provided in the schema.
-    Always wrap database, schema, table, or column names with backticks (`) if they contain special characters like hyphens.
-    Do NOT include any comments or formatting besides the SQL code itself.
-    Output only the SQL query, no explanations, no markdown, no code fences.
-    Do NOT include words like 'sql', 'SQL Query:', or any prefixes before the query.
-    Use exact table/column names from the schema.
-    Wrap table or column names in backticks (`) if they contain special characters.
-    Ensure the SQL syntax is correct for MySQL.
-    Avoid nextline character or any character that causes sql syntax errors.
+    Write only the SQL query and nothing else. Do not wrap the SQL query in any other text, not even backticks.
 
     For example:
     Question: Which 3 members have the most users?
     SQL Query: select m.name as member_name, count(u.id) as user_count from wnxa-staging.Member m JOIN wnxa-staging.User u on u.memberId = m.id GROUP BY m.id ORDER BY user_count DESC LIMIT 3;
     Question: How many active members are there?
-    SQL Query: select count(*) from wnxa-staging.User where isActive = 1;
+    SQL Query: select count(*) from wnxa-staging.Member where isActive = 1;
 
     Question: {question}
     SQL Query:
@@ -71,11 +66,6 @@ def get_sql_chain(db: SQLDatabase):
         | llm
         | StrOutputParser()
     )
-
-# Log and run the query
-def log_and_run_query(db: SQLDatabase, query: str):
-    logging.info(f"Executing SQL Query: {query}")
-    return db.run(query)
 
 # Get Response
 def get_response(user_query: str, db: SQLDatabase, chat_history: list):
@@ -115,8 +105,9 @@ def get_response(user_query: str, db: SQLDatabase, chat_history: list):
     return response
 
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-    st.session_state.chat_history.append(AIMessage(content="Hello! Ask me anything about the WNXA MySQL database."))
+    st.session_state.chat_history = [
+        AIMessage(content="Hello! Ask me anything about the WNXA MySQL database."),
+    ]
 
 with st.sidebar:
     st.header("Settings")
