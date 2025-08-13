@@ -20,6 +20,7 @@ sql_response_model = os.getenv("SQL_RESPONSE_MODEL", "llama3.1:8b")
 llm_temperature = float(os.getenv("LLM_TEMPERATURE", 0.0))
 
 logging.info(f"Using SQL Chain Model: {sql_chain_model}")
+logging.info(f"Using SQL Response Model: {sql_response_model}")
 
 st.set_page_config(page_title="WNXA MySQL AI", page_icon=":speech_balloon:", layout="wide")
 st.title("Chat with WNXA MySQL DB")
