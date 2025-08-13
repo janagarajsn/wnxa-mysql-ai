@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 import streamlit as st
+import logging
 from langchain_community.utilities import SQLDatabase
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -9,6 +10,9 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 st.set_page_config(page_title="WNXA MySQL AI", page_icon=":speech_balloon:", layout="wide")
 st.title("Chat with WNXA MySQL DB")
@@ -33,7 +37,7 @@ def get_sql_chain(db: SQLDatabase):
     Question: Which 3 members have the most users?
     SQL Query: select m.name as member_name, count(u.id) as user_count from wnxa-staging.Member m JOIN wnxa-staging.User u on u.memberId = m.id GROUP BY m.id ORDER BY user_count DESC LIMIT 3;
     Question: How many active members are there?
-    SQL Query: select count(*) from wnxa-staging.User where isActive = 1;
+    SQL Query: select count(*) from wnxa-staging.Member where isActive = 1;
 
     Question: {question}
     SQL Query:
@@ -129,6 +133,7 @@ for message in st.session_state.chat_history:
 user_query = st.chat_input("Type your message here...")
 if user_query:
     st.session_state.chat_history.append(HumanMessage(content=user_query))
+    logging.info(f"User query: {user_query}")
 
     with st.chat_message("Human"):
         st.markdown(user_query)

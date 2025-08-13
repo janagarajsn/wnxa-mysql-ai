@@ -1,7 +1,8 @@
 import os
+import re
+import logging
 from dotenv import load_dotenv
 import streamlit as st
-import logging
 from langchain_community.utilities import SQLDatabase
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -18,8 +19,26 @@ sql_chain_model = os.getenv("SQL_CHAIN_MODEL", "llama3.1:8b")
 sql_response_model = os.getenv("SQL_RESPONSE_MODEL", "llama3.1:8b")
 llm_temperature = float(os.getenv("LLM_TEMPERATURE", 0.0))
 
+logging.info(f"Using SQL Chain Model: {sql_chain_model}")
+
 st.set_page_config(page_title="WNXA MySQL AI", page_icon=":speech_balloon:", layout="wide")
 st.title("Chat with WNXA MySQL DB")
+
+#Clean SQL response to remove any unwanted characters
+def clean_sql(response: str) -> str:
+    logging.debug(f"Original SQL response: {response}")
+    # Remove any text before the first SELECT/INSERT/UPDATE/DELETE
+    match = re.search(r"(SELECT|INSERT|UPDATE|DELETE)", response, re.IGNORECASE)
+    if match:
+        response = response[match.start():]
+    
+    # Remove any text after the last semicolon
+    if ';' in response:
+        response = response[:response.rfind(';') + 1]
+    
+    logging.debug(f"Cleaned SQL response: {response}")
+    
+    return response
 
 # Initialize the MySQL connection
 def init_database(host: str, user: str, password: str, database: str, port: str) -> SQLDatabase:
@@ -72,11 +91,6 @@ def get_sql_chain(db: SQLDatabase):
         | StrOutputParser()
     )
 
-# Log and run the query
-def log_and_run_query(db: SQLDatabase, query: str):
-    logging.info(f"Executing SQL Query: {query}")
-    return db.run(query)
-
 # Get Response
 def get_response(user_query: str, db: SQLDatabase, chat_history: list):
     
@@ -100,7 +114,7 @@ def get_response(user_query: str, db: SQLDatabase, chat_history: list):
     chain = (
         RunnablePassthrough.assign(query=sql_chain).assign(
             schema=lambda _: db.get_table_info(), 
-            response=lambda vars: log_and_run_query(db, vars["query"]),
+            response=lambda vars: db.run(clean_sql(vars["query"])),
             )
         | prompt
         | llm
@@ -152,7 +166,6 @@ for message in st.session_state.chat_history:
 user_query = st.chat_input("Type your message here...")
 if user_query:
     st.session_state.chat_history.append(HumanMessage(content=user_query))
-    logging.info(f"User query: {user_query}")
 
     with st.chat_message("Human"):
         st.markdown(user_query)
@@ -164,7 +177,6 @@ if user_query:
                 response = "Please connect to the database first."
             else:
                 response = get_response(user_query, st.session_state.db, st.session_state.chat_history)
-                logging.info(f"Response generated")
             st.markdown(response)
         except Exception as e:
             st.error(f"Error processing your request: {e}")

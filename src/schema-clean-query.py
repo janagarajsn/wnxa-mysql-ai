@@ -1,7 +1,9 @@
 import os
+import re
+import logging
+import pymysql
 from dotenv import load_dotenv
 import streamlit as st
-import logging
 from langchain_community.utilities import SQLDatabase
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -18,8 +20,56 @@ sql_chain_model = os.getenv("SQL_CHAIN_MODEL", "llama3.1:8b")
 sql_response_model = os.getenv("SQL_RESPONSE_MODEL", "llama3.1:8b")
 llm_temperature = float(os.getenv("LLM_TEMPERATURE", 0.0))
 
+logging.info(f"Using SQL Chain Model: {sql_chain_model}")
+
 st.set_page_config(page_title="WNXA MySQL AI", page_icon=":speech_balloon:", layout="wide")
 st.title("Chat with WNXA MySQL DB")
+
+# Generate Schema Description
+def generate_schema_description(host, user, password, database, port) -> str:
+    """Generate a human-readable schema description for all tables."""
+    connection = pymysql.connect(
+        host=host,
+        user=user,
+        password=password,
+        database=database,
+        port=int(port),
+        cursorclass=pymysql.cursors.DictCursor
+    )
+    schema_description = []
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SHOW TABLES")
+            tables = [row[f'Tables_in_{database}'] for row in cursor.fetchall()]
+
+            for table in tables:
+                schema_description.append(f"Table: {table}")
+                cursor.execute(f"SHOW COLUMNS FROM `{table}`")
+                columns = cursor.fetchall()
+                for col in columns:
+                    nullable = "NULL" if col['Null'] == 'YES' else "NOT NULL"
+                    schema_description.append(f"- {col['Field']} ({col['Type']}, {nullable})")
+                schema_description.append("")  # blank line
+    finally:
+        connection.close()
+
+    return "\n".join(schema_description)
+
+#Clean SQL response to remove any unwanted characters
+def clean_sql(response: str) -> str:
+    logging.info(f"Original SQL response: {response}")
+    # Remove any text before the first SELECT/INSERT/UPDATE/DELETE
+    match = re.search(r"(SELECT|INSERT|UPDATE|DELETE)", response, re.IGNORECASE)
+    if match:
+        response = response[match.start():]
+    
+    # Remove any text after the last semicolon
+    if ';' in response:
+        response = response[:response.rfind(';') + 1]
+    
+    logging.info(f"Cleaned SQL response: {response}")
+    
+    return response
 
 # Initialize the MySQL connection
 def init_database(host: str, user: str, password: str, database: str, port: str) -> SQLDatabase:
@@ -27,32 +77,34 @@ def init_database(host: str, user: str, password: str, database: str, port: str)
     return SQLDatabase.from_uri(db_uri)
 
 # Get SQL Chain
-def get_sql_chain(db: SQLDatabase):
+def get_sql_chain(schema_text: str, db_name: str):
     prompt_template = """
     You are a MySQL query generator. Based on the table schema below, write a SQL query that would answer the user's question. Take the conversation history into account.
 
     <SCHEMA>{schema}</SCHEMA>
-    Conversation History: {chat_history}
-
-    Important instructions:
-    Use ONLY the schema below to write the correct SQL query for the question.
-    Output ONLY the SQL code. No explanations, no reasoning, no <think> tags.
-    Write only the pure SQL query without any markdown, code fences, or extra explanation.
-    Use the exact table and column names as provided in the schema.
-    Always wrap database, schema, table, or column names with backticks (`) if they contain special characters like hyphens.
-    Do NOT include any comments or formatting besides the SQL code itself.
-    Output only the SQL query, no explanations, no markdown, no code fences.
-    Do NOT include words like 'sql', 'SQL Query:', or any prefixes before the query.
-    Use exact table/column names from the schema.
-    Wrap table or column names in backticks (`) if they contain special characters.
-    Ensure the SQL syntax is correct for MySQL.
-    Avoid nextline character or any character that causes sql syntax errors.
+    <DATABASE>{db_name}</DATABASE>
+    
+    Important instructions (read carefully):
+    Use only the schema below to write the correct SQL query for the question.
+    Use only standard ASCII conditionals and operators: =, !=, <, <=, >, >=, AND, OR, NOT, IN, LIKE, BETWEEN.
+    Use only the columns provided in the schema. Do not assume any other columns exist.
+    Output only the SQL code — no explanations, no reasoning, no <think> tags, no markdown, no code fences.
+    Use exact table and column names from the schema.
+    If any database, schema, table, or column name contains special characters (such as hyphens, spaces, or reserved keywords), wrap it in backticks (`). 
+    For Example: 
+    Correct: SELECT name FROM my-db`.`user table`; 
+    Incorrect: SELECT name FROM my-db.user table;
+    Ensure the SQL syntax is valid for MySQL.
+    Avoid any newline characters or formatting that could cause SQL syntax errors — output as a single line unless explicitly needed.
+    Never include comments or extra text — just the SQL query.
 
     For example:
     Question: Which 3 members have the most users?
-    SQL Query: select m.name as member_name, count(u.id) as user_count from wnxa-staging.Member m JOIN wnxa-staging.User u on u.memberId = m.id GROUP BY m.id ORDER BY user_count DESC LIMIT 3;
+    SQL Query: select m.name as member_name, count(u.id) as user_count from `wnxa-staging`.Member m JOIN `wnxa-staging`.User u on u.memberId = m.id GROUP BY m.id ORDER BY user_count DESC LIMIT 3;
     Question: How many active members are there?
-    SQL Query: select count(*) from wnxa-staging.User where isActive = 1;
+    SQL Query: select count(*) from `wnxa-staging`.Member where isActive = 1;
+
+    Replace wnxa-staging with the actual database name if needed.
 
     Question: {question}
     SQL Query:
@@ -62,30 +114,23 @@ def get_sql_chain(db: SQLDatabase):
 
     llm = ChatOllama(model=sql_chain_model, temperature=llm_temperature)
 
-    def get_schema(_):
-        return db.get_table_info()
-
     return (
-        RunnablePassthrough.assign(schema=get_schema)
+        RunnablePassthrough.assign(schema=lambda _: schema_text, db_name=lambda _: db_name)
         | prompt
         | llm
         | StrOutputParser()
     )
 
-# Log and run the query
-def log_and_run_query(db: SQLDatabase, query: str):
-    logging.info(f"Executing SQL Query: {query}")
-    return db.run(query)
-
 # Get Response
-def get_response(user_query: str, db: SQLDatabase, chat_history: list):
+def get_response(user_query: str, db: SQLDatabase, chat_history: list, schema_text: str, db_name: str) -> str:
     
     # Build SQL Chain
-    sql_chain = get_sql_chain(db)
+    sql_chain = get_sql_chain(schema_text, db_name)
 
     template = """
     You are a Data Analyst for the WNXA MySQL database. You are interacting with a user who is asking you questions about the database.
     Based on the table schema below, question, sql query, and sql response, write a natural language response.
+    Execute the SQL query and return the result in human language.
     <SCHEMA>{schema}</SCHEMA>
 
     Conversation History: {chat_history}
@@ -99,8 +144,8 @@ def get_response(user_query: str, db: SQLDatabase, chat_history: list):
 
     chain = (
         RunnablePassthrough.assign(query=sql_chain).assign(
-            schema=lambda _: db.get_table_info(), 
-            response=lambda vars: log_and_run_query(db, vars["query"]),
+            schema=lambda _: schema_text, 
+            response=lambda vars: db.run(clean_sql(vars["query"])),
             )
         | prompt
         | llm
@@ -131,14 +176,22 @@ with st.sidebar:
     if st.button("Connect"):
         with st.spinner("Connecting to the database..."):
             try:
-                db = init_database(
+                st.session_state.db = init_database(
                     st.session_state["db_host"],
                     st.session_state["db_user"],
                     st.session_state["db_password"],
                     st.session_state["db_name"],
                     st.session_state["db_port"]
                 )
-                st.session_state.db = db
+
+                st.session_state.schema_text = generate_schema_description(
+                    st.session_state["db_host"],
+                    st.session_state["db_user"],
+                    st.session_state["db_password"],
+                    st.session_state["db_name"],
+                    st.session_state["db_port"]
+                )
+
                 st.success("Connected to the database!")
             except Exception as e:
                 st.error(f"Failed to connect: {e}")
@@ -163,7 +216,7 @@ if user_query:
             if "db" not in st.session_state:
                 response = "Please connect to the database first."
             else:
-                response = get_response(user_query, st.session_state.db, st.session_state.chat_history)
+                response = get_response(user_query, st.session_state.db, st.session_state.chat_history, st.session_state.schema_text, st.session_state.db_name)
                 logging.info(f"Response generated")
             st.markdown(response)
         except Exception as e:
