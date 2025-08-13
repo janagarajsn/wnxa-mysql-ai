@@ -24,6 +24,11 @@ logging.info(f"Using SQL Chain Model: {sql_chain_model}")
 st.set_page_config(page_title="WNXA MySQL AI", page_icon=":speech_balloon:", layout="wide")
 st.title("Chat with WNXA MySQL DB")
 
+# Log and run the query
+def log_and_run_query(db: SQLDatabase, query: str):
+    logging.info(f"Executing SQL Query: {query}")
+    return db.run(query)
+
 #Clean SQL response to remove any unwanted characters
 def clean_sql(response: str) -> str:
     logging.debug(f"Original SQL response: {response}")
@@ -114,7 +119,7 @@ def get_response(user_query: str, db: SQLDatabase, chat_history: list):
     chain = (
         RunnablePassthrough.assign(query=sql_chain).assign(
             schema=lambda _: db.get_table_info(), 
-            response=lambda vars: db.run(clean_sql(vars["query"])),
+            response=lambda vars: log_and_run_query(db, clean_sql(vars["query"])),
             )
         | prompt
         | llm
@@ -166,6 +171,7 @@ for message in st.session_state.chat_history:
 user_query = st.chat_input("Type your message here...")
 if user_query:
     st.session_state.chat_history.append(HumanMessage(content=user_query))
+    logging.info(f"User query: {user_query}")
 
     with st.chat_message("Human"):
         st.markdown(user_query)
@@ -177,6 +183,7 @@ if user_query:
                 response = "Please connect to the database first."
             else:
                 response = get_response(user_query, st.session_state.db, st.session_state.chat_history)
+                logging.info(f"Response generated")
             st.markdown(response)
         except Exception as e:
             st.error(f"Error processing your request: {e}")
