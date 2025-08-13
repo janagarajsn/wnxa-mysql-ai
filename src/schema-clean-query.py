@@ -222,6 +222,7 @@ if user_query:
             st.markdown(response)
         except Exception as e:
             st.error(f"Error processing your request: {e}")
+            logging.info(f"Error processing request")
             response = "Sorry, I couldn't process your request. Please rephrase your question."
 
         

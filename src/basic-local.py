@@ -36,7 +36,7 @@ def init_database(host: str, user: str, password: str, database: str, port: str)
     return SQLDatabase.from_uri(db_uri)
 
 # Get SQL Chain
-def get_sql_chain(db: SQLDatabase):
+def get_sql_chain(db: SQLDatabase, db_name: str):
     prompt_template = """
     You are a Data Analyst for the WNXA MySQL database.
     Based on the table schema below, write a SQL query that would answer the user's question. Take the conversation history into account.
@@ -45,10 +45,11 @@ def get_sql_chain(db: SQLDatabase):
     Conversation History: {chat_history}
 
     Write only the SQL query and nothing else. Do not wrap the SQL query in any other text, not even backticks.
+    Replace the database name wnxa-staging with '{db_name}' in the SQL query.
 
     For example:
     Question: Which 3 members have the most users?
-    SQL Query: select m.name as member_name, count(u.id) as user_count from wnxa-staging.Member m JOIN wnxa-staging.User u on u.memberId = m.id GROUP BY m.id ORDER BY user_count DESC LIMIT 3;
+    SQL Query: select m.name as member_name, count(u.id) as user_count from wnxa-staging.Member m JOIN wnxa-localprd.User u on u.memberId = m.id GROUP BY m.id ORDER BY user_count DESC LIMIT 3;
     Question: How many active members are there?
     SQL Query: select count(*) from wnxa-staging.Member where isActive = 1;
 
@@ -64,17 +65,17 @@ def get_sql_chain(db: SQLDatabase):
         return db.get_table_info()
 
     return (
-        RunnablePassthrough.assign(schema=get_schema)
+        RunnablePassthrough.assign(schema=get_schema).assign(db_name=lambda _: db_name)
         | prompt
         | llm
         | StrOutputParser()
     )
 
 # Get Response
-def get_response(user_query: str, db: SQLDatabase, chat_history: list):
+def get_response(user_query: str, db: SQLDatabase, chat_history: list, db_name: str):
     
     # Build SQL Chain
-    sql_chain = get_sql_chain(db)
+    sql_chain = get_sql_chain(db, db_name)
 
     template = """
     You are a Data Analyst for the WNXA MySQL database. You are interacting with a user who is asking you questions about the database.
@@ -157,11 +158,12 @@ if user_query:
             if "db" not in st.session_state:
                 response = "Please connect to the database first."
             else:
-                response = get_response(user_query, st.session_state.db, st.session_state.chat_history)
+                response = get_response(user_query, st.session_state.db, st.session_state.chat_history, st.session_state["db_name"])
                 logging.info(f"Response generated")
             st.markdown(response)
         except Exception as e:
             st.error(f"Error processing your request: {e}")
+            logging.info(f"Error processing request")
             response = "Sorry, I couldn't process your request. Please rephrase your question."
 
         
